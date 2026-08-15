@@ -1,0 +1,48 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: cargoflow
+      POSTGRES_PASSWORD: cargoflow
+      POSTGRES_DB: cargoflow
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+
+  n8n:
+    image: n8nio/n8n
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_BASIC_AUTH_ACTIVE=false
+    volumes:
+      - n8n_data:/home/node/.n8n
+
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+      - redis
+    env_file: .env
+
+  # frontend:
+  #   build: ./frontend
+  #   ports: ["3000:3000"]
+  #   # Se activa en el Sprint 2
+
+  # notifications:
+  #   build: ./notification-service
+  #   ports: ["4000:4000"]
+  #   # Se activa en el Sprint 4
+
+volumes:
+  postgres_data:
+  n8n_data:

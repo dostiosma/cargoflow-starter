@@ -1,0 +1,26 @@
+# Env
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Node
+node_modules/
+dist/
+build/
+
+# Flutter
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# Docker / logs
+*.log
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
