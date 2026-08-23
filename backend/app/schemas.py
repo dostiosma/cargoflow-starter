@@ -1,7 +1,9 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, EmailStr, ConfigDict
+from pydantic import BaseModel, ConfigDict, EmailStr
+
+from app.models import OrderPriority, OrderStatus
 
 
 class LoginRequest(BaseModel):
@@ -21,4 +23,27 @@ class UserOut(BaseModel):
     id: uuid.UUID
     email: str
     role: str
+    created_at: datetime
+
+
+class OrderCreate(BaseModel):
+    customer_name: str
+    origin_address: str
+    destination_address: str
+    priority: OrderPriority = OrderPriority.normal
+
+
+class OrderStatusUpdate(BaseModel):
+    status: OrderStatus
+
+
+class OrderOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    customer_name: str
+    origin_address: str
+    destination_address: str
+    priority: OrderPriority
+    status: OrderStatus
     created_at: datetime
