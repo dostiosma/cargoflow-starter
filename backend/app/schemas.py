@@ -64,3 +64,17 @@ class VehicleOut(BaseModel):
 
 class VehicleStatusUpdate(BaseModel):
     status: VehicleStatus
+
+
+from app.models import DriverStatus
+
+
+class DriverOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    user_id: uuid.UUID
+    name: str
+    phone: str | None = None
+    vehicle_id: uuid.UUID | None = None
+    status: DriverStatus

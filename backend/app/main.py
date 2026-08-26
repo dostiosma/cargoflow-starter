@@ -28,3 +28,7 @@ app.include_router(orders.router)
 from app.routers import vehicles
 
 app.include_router(vehicles.router)
+
+from app.routers import drivers
+
+app.include_router(drivers.router)
