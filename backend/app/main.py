@@ -24,3 +24,7 @@ def health():
 from app.routers import orders
 
 app.include_router(orders.router)
+
+from app.routers import vehicles
+
+app.include_router(vehicles.router)

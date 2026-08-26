@@ -47,3 +47,20 @@ class OrderOut(BaseModel):
     priority: OrderPriority
     status: OrderStatus
     created_at: datetime
+
+
+from app.models import VehicleStatus, VehicleType
+
+
+class VehicleOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    plate: str
+    type: VehicleType
+    capacity_kg: int
+    status: VehicleStatus
+
+
+class VehicleStatusUpdate(BaseModel):
+    status: VehicleStatus
