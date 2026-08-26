@@ -32,3 +32,11 @@ app.include_router(vehicles.router)
 from app.routers import drivers
 
 app.include_router(drivers.router)
+
+from app.routers import shipments
+
+app.include_router(shipments.router)
+
+from app.routers import shipments
+
+app.include_router(shipments.router)

@@ -78,3 +78,27 @@ class DriverOut(BaseModel):
     phone: str | None = None
     vehicle_id: uuid.UUID | None = None
     status: DriverStatus
+
+
+from app.models import OrderStatus as ShipmentStatus
+
+
+class ShipmentCreate(BaseModel):
+    order_id: uuid.UUID
+
+
+class ShipmentStatusUpdate(BaseModel):
+    status: ShipmentStatus
+
+
+class ShipmentOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    order_id: uuid.UUID
+    vehicle_id: uuid.UUID | None = None
+    driver_id: uuid.UUID | None = None
+    estimated_delivery: datetime | None = None
+    actual_delivery: datetime | None = None
+    status: ShipmentStatus
+    delay_risk_score: float | None = None
