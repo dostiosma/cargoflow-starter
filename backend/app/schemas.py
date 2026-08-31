@@ -102,3 +102,14 @@ class ShipmentOut(BaseModel):
     actual_delivery: datetime | None = None
     status: ShipmentStatus
     delay_risk_score: float | None = None
+
+
+class ShipmentAssignResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    order_id: uuid.UUID
+    vehicle_id: uuid.UUID | None = None
+    driver_id: uuid.UUID | None = None
+    status: ShipmentStatus
+    message: str
