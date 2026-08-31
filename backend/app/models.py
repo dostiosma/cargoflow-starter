@@ -67,6 +67,7 @@ class Vehicle(Base):
     type = Column(SAEnum(VehicleType), nullable=False)
     capacity_kg = Column(Integer, nullable=False)
     status = Column(SAEnum(VehicleStatus), nullable=False, default=VehicleStatus.available)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     drivers = relationship("Driver", back_populates="vehicle")
 
@@ -80,6 +81,7 @@ class Driver(Base):
     phone = Column(String, nullable=True)
     vehicle_id = Column(GUID(), ForeignKey("vehicles.id"), nullable=True)
     status = Column(SAEnum(DriverStatus), nullable=False, default=DriverStatus.offline)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     user = relationship("User", back_populates="driver")
     vehicle = relationship("Vehicle", back_populates="drivers")
