@@ -32,6 +32,8 @@ services:
       - postgres
       - redis
     env_file: .env
+    environment:
+      DATABASE_URL: postgresql://cargoflow:cargoflow@postgres:5432/cargoflow
 
   # frontend:
   #   build: ./frontend
