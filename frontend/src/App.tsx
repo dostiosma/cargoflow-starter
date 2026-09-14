@@ -2,7 +2,11 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { AuthProvider } from '@/context/AuthContext'
 import { Login } from '@/components/Login'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
-import { Dashboard } from '@/components/Dashboard'
+import { Layout } from '@/components/Layout'
+import { Dashboard } from '@/pages/Dashboard'
+import { OrdersList } from '@/pages/OrdersList'
+import { OrderDetail } from '@/pages/OrderDetail'
+import { Fleet } from '@/pages/Fleet'
 
 function App() {
   return (
@@ -11,13 +15,17 @@ function App() {
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route
-            path="/dashboard"
             element={
               <ProtectedRoute>
-                <Dashboard />
+                <Layout />
               </ProtectedRoute>
             }
-          />
+          >
+            <Route path="dashboard" element={<Dashboard />} />
+            <Route path="orders" element={<OrdersList />} />
+            <Route path="orders/:id" element={<OrderDetail />} />
+            <Route path="fleet" element={<Fleet />} />
+          </Route>
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
         </Routes>
       </AuthProvider>
