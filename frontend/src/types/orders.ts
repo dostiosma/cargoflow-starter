@@ -1,15 +1,16 @@
 /**
  * Tipos de pedidos (orders).
  *
- * Refleja 1:1 los schemas `OrderOut` y `OrderCreate` de
- * backend/app/schemas.py y las rutas de backend/app/routers/orders.py
- * (GET /api/orders, GET /api/orders/{id}, POST /api/orders) —
- * snake_case tal como lo define el backend (sección 6 del master spec:
- * no hay traducción de campos entre capas al hablar con la API).
+ * Refleja 1:1 los schemas `OrderOut`, `OrderCreate` y
+ * `OrderStatusUpdate` de backend/app/schemas.py y las rutas de
+ * backend/app/routers/orders.py (GET /api/orders, GET
+ * /api/orders/{id}, POST /api/orders, PATCH /api/orders/{id}/status)
+ * — snake_case tal como lo define el backend (sección 6 del master
+ * spec: no hay traducción de campos entre capas al hablar con la
+ * API).
  *
- * Block 3A.1 cubría lectura únicamente. Block 3B.1 agrega OrderCreate
- * para creación. OrderStatusUpdate (PATCH /api/orders/{id}/status)
- * sigue fuera.
+ * Block 3A.1 cubría lectura únicamente. Block 3B.1 agregó
+ * OrderCreate. Block 3B.2 agrega OrderStatusUpdate.
  */
 
 /** backend/app/models.py::OrderPriority */
@@ -36,4 +37,14 @@ export interface OrderCreate {
   destination_address: string
   /** Priority es opcional; el backend usa 'normal' por defecto. */
   priority?: OrderPriority
+}
+
+/**
+ * backend/app/schemas.py::OrderStatusUpdate — payload para PATCH
+ * /api/orders/{id}/status. El backend no valida transiciones (asigna
+ * payload.status directo), así que no hay ningún subconjunto de
+ * OrderStatus restringido acá tampoco.
+ */
+export interface OrderStatusUpdate {
+  status: OrderStatus
 }
