@@ -1,6 +1,6 @@
 /**
- * Barra de navegación entre las páginas protegidas. Bloque 3A.2:
- * solo estructura de navegación — vive en components/ porque es
+ * Barra de navegación entre las páginas protegidas. Bloque 3A.2 (actualizado en 3B.1):
+ * estructura de navegación + botón de crear pedido. Vive en components/ porque es
  * reutilizable (la monta Layout, no una ruta puntual).
  *
  * El logout que antes vivía en el placeholder de Dashboard
@@ -8,7 +8,7 @@
  * cada página.
  */
 
-import { NavLink } from 'react-router-dom'
+import { Link, NavLink } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
 import { Button } from '@/components/ui/button'
 
@@ -38,6 +38,9 @@ export function Nav() {
       </div>
       <div className="flex items-center gap-3">
         {email && <span className="text-sm text-muted-foreground">{email}</span>}
+        <Link to="/orders/new">
+          <Button type="button">Crear pedido</Button>
+        </Link>
         <Button type="button" onClick={logout}>
           Cerrar sesión
         </Button>

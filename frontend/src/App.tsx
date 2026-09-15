@@ -5,6 +5,7 @@ import { ProtectedRoute } from '@/components/ProtectedRoute'
 import { Layout } from '@/components/Layout'
 import { Dashboard } from '@/pages/Dashboard'
 import { OrdersList } from '@/pages/OrdersList'
+import { CreateOrder } from '@/pages/CreateOrder'
 import { OrderDetail } from '@/pages/OrderDetail'
 import { Fleet } from '@/pages/Fleet'
 
@@ -23,6 +24,7 @@ function App() {
           >
             <Route path="dashboard" element={<Dashboard />} />
             <Route path="orders" element={<OrdersList />} />
+            <Route path="orders/new" element={<CreateOrder />} />
             <Route path="orders/:id" element={<OrderDetail />} />
             <Route path="fleet" element={<Fleet />} />
           </Route>
