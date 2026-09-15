@@ -203,6 +203,14 @@ Ningún chat/agente inventa un endpoint o campo que no esté en esta tabla. Si h
 
 Un solo canal: `shipment.status.changed`.
 
+Payload del evento:
+
+```json
+{
+  "shipment_id": "UUID",
+  "status": "pending | assigned | in_transit | delivered | cancelled"
+}
+
 ```
 FastAPI actualiza un shipment
         │
