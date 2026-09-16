@@ -1,5 +1,7 @@
 import uuid
+from unittest.mock import MagicMock
 
+import app.routers.shipments as shipments_module
 from app.models import Order, OrderPriority, OrderStatus, Shipment, User, UserRole
 
 
@@ -75,3 +77,42 @@ def test_update_shipment_status_requires_auth(client):
         json={"status": "delivered"},
     )
     assert response.status_code == 401
+
+
+def test_update_shipment_status_publishes_event(client, auth_headers, db_session, monkeypatch):
+    order = Order(customer_name="Cliente E", origin_address="R", destination_address="S", priority=OrderPriority.normal)
+    db_session.add(order)
+    db_session.commit()
+    db_session.refresh(order)
+
+    shipment = Shipment(order_id=order.id, status=OrderStatus.pending)
+    db_session.add(shipment)
+    db_session.commit()
+    db_session.refresh(shipment)
+
+    mock_publish = MagicMock()
+    monkeypatch.setattr(shipments_module, "publish_shipment_status_changed", mock_publish)
+
+    response = client.patch(
+        f"/api/shipments/{shipment.id}/status",
+        json={"status": "delivered"},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    mock_publish.assert_called_once_with(shipment.id, OrderStatus.delivered)
+
+
+def test_update_shipment_status_not_found_does_not_publish(client, auth_headers, monkeypatch):
+    mock_publish = MagicMock()
+    monkeypatch.setattr(shipments_module, "publish_shipment_status_changed", mock_publish)
+
+    fake_id = str(uuid.uuid4())
+    response = client.patch(
+        f"/api/shipments/{fake_id}/status",
+        json={"status": "delivered"},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 404
+    mock_publish.assert_not_called()

@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.deps import get_current_user
+from app.events import publish_shipment_status_changed
 from app.models import Order, Shipment, User
 from app.schemas import ShipmentOut, ShipmentStatusUpdate
 
@@ -44,6 +45,7 @@ def update_shipment_status(
     shipment.status = payload.status
     db.commit()
     db.refresh(shipment)
+    publish_shipment_status_changed(shipment.id, shipment.status)
     return shipment
 
 
