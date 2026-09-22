@@ -9,16 +9,31 @@
  * modelo (OrderStatus/ShipmentStatus/VehicleStatus/DriverStatus). No
  * hay promedios, tasas ni cálculos de tiempo — nada que dependa de
  * una definición de negocio no provista por el backend.
+ *
+ * Sprint 4 Block 3A: el desglose de "Envíos" reacciona en vivo al
+ * evento shipment.status.changed (useShipmentEvents, montado en
+ * Layout.tsx vía ShipmentEventsProvider) sin volver a pedir los
+ * cuatro GET. `shipments` se calcula como valor derivado en render
+ * (useMemo) combinando `data.shipments` con el último evento — no en
+ * un useEffect que llame a setData, porque reaccionar a un valor
+ * externo con un setState síncrono dentro de un efecto es exactamente
+ * el anti-patrón que marca la regla de lint
+ * react-hooks/set-state-in-effect (setState debe ir en el callback
+ * de la suscripción al sistema externo, o el dato debe derivarse en
+ * render — acá aplica lo segundo). Si el shipment_id del evento no
+ * está en data.shipments, `shipments` devuelve el arreglo original
+ * sin cambios.
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { listOrders } from '@/services/orders'
 import { listShipments } from '@/services/shipments'
 import { listVehicles } from '@/services/vehicles'
 import { listDrivers } from '@/services/drivers'
 import { StatSummary } from '@/components/StatSummary'
+import { useShipmentEvents } from '@/hooks/useShipmentEvents'
 import type { Order } from '@/types/orders'
-import type { Shipment } from '@/types/shipments'
+import type { Shipment, ShipmentStatus } from '@/types/shipments'
 import type { Vehicle } from '@/types/vehicles'
 import type { Driver } from '@/types/drivers'
 
@@ -40,6 +55,7 @@ interface DashboardData {
 export function Dashboard() {
   const [data, setData] = useState<DashboardData | null>(null)
   const [error, setError] = useState(false)
+  const { lastEvent } = useShipmentEvents()
 
   useEffect(() => {
     Promise.all([listOrders(), listShipments(), listVehicles(), listDrivers()])
@@ -51,6 +67,18 @@ export function Dashboard() {
         setError(true)
       })
   }, [])
+
+  const shipments = useMemo<Shipment[]>(() => {
+    if (!data) return []
+    if (!lastEvent) return data.shipments
+    const known = data.shipments.some((s) => s.id === lastEvent.shipment_id)
+    if (!known) return data.shipments
+    return data.shipments.map((s) =>
+      s.id === lastEvent.shipment_id
+        ? { ...s, status: lastEvent.status as ShipmentStatus }
+        : s,
+    )
+  }, [data, lastEvent])
 
   return (
     <div className="flex flex-col gap-4">
@@ -68,8 +96,8 @@ export function Dashboard() {
           />
           <StatSummary
             title="Envíos"
-            total={data.shipments.length}
-            breakdown={countByStatus(data.shipments)}
+            total={shipments.length}
+            breakdown={countByStatus(shipments)}
           />
           <StatSummary
             title="Vehículos"
