@@ -1,6 +1,6 @@
 # CargoFlow — Documento Maestro y Arquitectura
 
-**Versión:** 0.2 · **Estado:** Sprint 0, arquitectura revisada · **Propósito:** proyecto de portafolio para aplicar a una vacante de desarrollador en XCargo (última milla, Colombia)
+**Versión:** 0.3 · **Estado:** Sprint 0, arquitectura revisada · **Propósito:** proyecto de portafolio para aplicar a una vacante de desarrollador en XCargo (última milla, Colombia)
 
 Este documento es la única fuente de verdad del proyecto. Cualquier cambio de arquitectura, modelo de datos o contrato de API se actualiza aquí primero, antes que en el código.
 
@@ -156,20 +156,51 @@ FastAPI es el único dueño de la lógica de negocio y de PostgreSQL. Node.js y 
 | Campo | Tipo | Notas |
 |---|---|---|
 | id | UUID | PK |
-| order_id | UUID | FK → orders |
+| order_id | UUID | FK → orders, único (1 Order → 1 Shipment) |
 | vehicle_id | UUID | FK → vehicles, nullable hasta asignar |
 | driver_id | UUID | FK → drivers, nullable hasta asignar |
-| estimated_delivery | timestamp | |
-| actual_delivery | timestamp | nullable |
-| status | enum | igual que orders.status |
-| delay_risk_score | float | 0–1, calculado por n8n (sección 9) |
+| assigned_at | timestamp | nullable hasta asignar; se fija atómicamente junto con vehicle_id/driver_id |
+| estimated_delivery | timestamp | nullable hasta asignar; ver "ETA operacional" más abajo |
+| actual_delivery | timestamp | nullable; se fija al llegar a un estado terminal |
+| status | enum | igual que orders.status; Shipment es la fuente de verdad operacional — ver "Máquina de estados operacional" más abajo |
+| delay_risk_score | float | 0–1, calculado por n8n y persistido por FastAPI (sección 9); vuelve a `null` al salir de `in_transit` |
 
-**Fórmula del MVP para `delay_risk_score`** (regla simple, no ML — y así se presenta en la entrevista):
+### Máquina de estados operacional
+
+`Shipment` es la fuente de verdad del progreso operacional. Los cambios operacionales del Shipment se reflejan en `Order.status`; los cambios manuales de `Order` no controlan el progreso operacional del Shipment.
+
+Transiciones válidas:
+- `pending → assigned`: únicamente mediante `POST /api/shipments/{id}/assign` (sección 7).
+- `assigned → in_transit → delivered`: mediante `PATCH /api/shipments/{id}/status` (Flutter).
+- `pending / assigned / in_transit → cancelled`: mediante `PATCH /api/orders/{id}/status` (cancelación administrativa). La cancelación se propaga al Shipment y libera los recursos asignados, dentro de la misma transacción.
+- `delivered` y `cancelled` son estados terminales.
+
+Al asignar (`POST /api/shipments/{id}/assign`, idempotente — no reasigna un shipment que ya tiene vehicle_id/driver_id):
+- `Shipment.status = assigned`, junto con `vehicle_id`, `driver_id` y `assigned_at`, se fijan atómicamente.
+- `Vehicle.status = in_use`, `Driver.status = busy`.
+- Un driver no puede tener más de un shipment activo simultáneamente.
+
+Al llegar a un estado terminal (`delivered` o `cancelled`):
+- `Vehicle.status = available`, `Driver.status = available`.
+- `actual_delivery` se fija.
+- `delay_risk_score` vuelve a `null`.
+
+### ETA operacional (`estimated_delivery`)
+
+`estimated_delivery` se fija en el momento de la asignación, no al crear el pedido: `estimated_delivery = assigned_at + 4 horas`, igual para las tres prioridades — `priority` no modifica `estimated_delivery`.
+
+Las 4 horas son una decisión de diseño del MVP, no una estimación logística real (sin distancia, tráfico ni ruta real — ver sección 2.3).
+
+**Fórmula del MVP para `delay_risk_score`** (regla simple, no ML — y así se presenta en la entrevista). Calculada por n8n (WF2, sección 9), persistida por FastAPI vía `PATCH /api/shipments/{id}/risk`:
 
 ```
-risk = (tiempo_transcurrido / tiempo_estimado) * peso_tiempo
-     + (1 si priority == "critical" sino 0) * peso_prioridad
+risk_crudo = (tiempo_transcurrido / tiempo_estimado) * 0.8
+           + (1 si priority == "critical" sino 0) * 0.2
+
+delay_risk_score = min(1.0, risk_crudo)
 ```
+
+`tiempo_transcurrido` y `tiempo_estimado` se miden desde `assigned_at` (ver "ETA operacional"). El componente temporal domina la fórmula; `priority == "critical"` adelanta la alerta, no la reemplaza. Alerta cuando `delay_risk_score > 0.7` (sección 9).
 
 ### Convención de nombres
 Backend, base de datos y el contrato de API JSON: **snake_case**, siempre. El frontend en React/TypeScript puede usar camelCase en su propio código interno, pero al hablar con la API respeta snake_case tal como está definido en la sección 7 — no hay traducción de campos entre capas. Esto evita el problema de `user_id` / `userId` / `idUser` conviviendo en el mismo sistema.
@@ -182,14 +213,16 @@ Backend, base de datos y el contrato de API JSON: **snake_case**, siempre. El fr
 |---|---|---|---|
 | POST | /api/auth/login | Login, devuelve JWT | React, Flutter |
 | GET | /api/orders | Listar pedidos | React |
-| POST | /api/orders | Crear pedido | React |
+| POST | /api/orders | Crear pedido (crea también su Shipment asociado, misma transacción) | React |
 | GET | /api/orders/{id} | Detalle de pedido | React |
-| PATCH | /api/orders/{id}/status | Cambiar estado | React, n8n |
-| GET | /api/shipments | Listar envíos | React |
+| PATCH | /api/orders/{id}/status | Cancelación administrativa (ver "Máquina de estados operacional", sección 6) | React, n8n |
+| GET | /api/shipments | Listar envíos (filtro opcional `?status=`) | React, n8n |
 | GET | /api/shipments/{id} | Detalle de envío | React, Flutter |
+| POST | /api/shipments/{id}/assign | Asigna vehículo y conductor disponibles (idempotente; FastAPI decide la selección, n8n no la duplica) | n8n |
 | PATCH | /api/shipments/{id}/status | Actualizar estado (ej. "entregado") | Flutter |
+| PATCH | /api/shipments/{id}/risk | Persiste `delay_risk_score` calculado por n8n (sección 6 y 9) | n8n |
 | GET | /api/vehicles | Listar vehículos | React, n8n |
-| PATCH | /api/vehicles/{id}/status | Cambiar disponibilidad | n8n |
+| PATCH | /api/vehicles/{id}/status | Cambiar disponibilidad manualmente (ej. `maintenance`) — WF1 no lo usa para asignar ni liberar recursos: eso es responsabilidad transaccional de FastAPI (sección 6, "Máquina de estados operacional") | n8n |
 | GET | /api/drivers | Listar conductores | React, n8n |
 | GET | /api/drivers/{id}/shipments | Ruta del día del conductor | Flutter |
 | GET | /api/reports/daily | Métricas del día | React, n8n |
@@ -201,30 +234,45 @@ Ningún chat/agente inventa un endpoint o campo que no esté en esta tabla. Si h
 
 ## 8. Eventos en tiempo real
 
-Un solo canal: `shipment.status.changed`.
+Un solo canal: `shipment.status.changed`. Transporta dos tipos de evento, distinguidos por el campo `type`.
 
-Payload del evento:
+Payload cuando `type = "status_changed"`:
 
 ```json
 {
+  "type": "status_changed",
   "shipment_id": "UUID",
   "status": "pending | assigned | in_transit | delivered | cancelled"
 }
+```
+
+Payload cuando `type = "risk_alert"` (se publica solo cuando `delay_risk_score > 0.7`, sección 6):
+
+```json
+{
+  "type": "risk_alert",
+  "shipment_id": "UUID",
+  "delay_risk_score": "float, 0–1"
+}
+```
 
 ```
-FastAPI actualiza un shipment
+FastAPI persiste el cambio (status o delay_risk_score)
         │
         ▼
-Publica el evento en Redis (pub/sub)
+Confirma en PostgreSQL (commit) — el evento nunca se publica antes del commit
+        │
+        ▼
+Publica el evento correspondiente en Redis (pub/sub)
         │
         ▼
 Node.js está suscrito, lo recibe
         │
         ▼
-Node.js lo reenvía por WebSocket
+Node.js lo reenvía por WebSocket tal cual, sin interpretarlo ni modificarlo
         │
         ▼
-React actualiza el dashboard sin recargar
+React discrimina el `type` recibido antes de interpretarlo, y actualiza el dashboard sin recargar
 ```
 
 ---
@@ -232,10 +280,10 @@ React actualiza el dashboard sin recargar
 ## 9. Automatización (n8n) — 3 workflows
 
 **WF1 — Asignación automática**
-`Webhook (pedido creado) → buscar vehículo disponible → buscar conductor disponible → PATCH /shipments → notificar`
+`Webhook (pedido creado) → POST /api/shipments/{id}/assign → notificar`
 
 **WF2 — Riesgo de retraso**
-`Cron cada 15 min → GET /shipments (en tránsito) → calcular delay_risk_score → si > 0.7 → generar alerta`
+`Cron cada 15 min → GET /api/shipments?status=in_transit → n8n calcula delay_risk_score → PATCH /api/shipments/{id}/risk → FastAPI persiste, confirma (commit) y publica el evento risk_alert si delay_risk_score > 0.7 (sección 8) — n8n nunca publica el evento directamente`
 
 **WF3 — Reporte diario** *(stretch, no bloquea el MVP)*
 `Cron 18:00 → GET /reports/daily → armar resumen → enviar por email`
