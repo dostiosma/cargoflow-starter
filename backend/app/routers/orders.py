@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.deps import get_current_user
-from app.models import Order, User
+from app.models import Order, Shipment, User
 from app.schemas import OrderCreate, OrderOut, OrderStatusUpdate
 
 router = APIRouter(prefix="/api/orders", tags=["orders"])
@@ -24,7 +24,9 @@ def create_order(
         priority=payload.priority,
     )
     db.add(order)
-    db.commit()
+    db.flush()  # asigna order.id sin cerrar la transaccion
+    db.add(Shipment(order_id=order.id))  # status=pending por default del modelo
+    db.commit()  # un solo commit: Order y Shipment en la misma transaccion (D1)
     db.refresh(order)
     return order
 

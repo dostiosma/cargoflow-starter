@@ -1,6 +1,6 @@
 import uuid
 
-from app.models import OrderStatus
+from app.models import OrderStatus, Shipment
 
 
 def test_create_order(client, auth_headers):
@@ -20,6 +20,27 @@ def test_create_order(client, auth_headers):
     assert body["status"] == "pending"
     assert body["priority"] == "high"
     assert "id" in body
+
+
+def test_create_order_creates_shipment(client, auth_headers, db_session):
+    response = client.post(
+        "/api/orders",
+        json={
+            "customer_name": "Empresa XYZ",
+            "origin_address": "Bogota",
+            "destination_address": "Chia",
+        },
+        headers=auth_headers,
+    )
+    assert response.status_code == 201
+    order_id = response.json()["id"]
+
+    shipments = db_session.query(Shipment).filter(Shipment.order_id == uuid.UUID(order_id)).all()
+    assert len(shipments) == 1
+    shipment = shipments[0]
+    assert shipment.status == OrderStatus.pending
+    assert shipment.vehicle_id is None
+    assert shipment.driver_id is None
 
 
 def test_create_order_requires_auth(client):
