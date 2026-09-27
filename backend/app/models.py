@@ -105,9 +105,10 @@ class Shipment(Base):
     __tablename__ = "shipments"
 
     id = Column(GUID(), primary_key=True, default=uuid.uuid4)
-    order_id = Column(GUID(), ForeignKey("orders.id"), nullable=False)
+    order_id = Column(GUID(), ForeignKey("orders.id"), nullable=False, unique=True)
     vehicle_id = Column(GUID(), ForeignKey("vehicles.id"), nullable=True)
     driver_id = Column(GUID(), ForeignKey("drivers.id"), nullable=True)
+    assigned_at = Column(DateTime, nullable=True)
     estimated_delivery = Column(DateTime, nullable=True)
     actual_delivery = Column(DateTime, nullable=True)
     status = Column(SAEnum(OrderStatus), nullable=False, default=OrderStatus.pending)
