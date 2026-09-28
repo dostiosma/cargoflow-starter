@@ -6,8 +6,9 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.deps import get_current_user
 from app.events import publish_shipment_status_changed
-from app.models import Order, Shipment, User
+from app.models import Order, OrderStatus, Shipment, User
 from app.schemas import ShipmentOut, ShipmentStatusUpdate
+from app.shipment_lifecycle import apply_terminal_state
 
 router = APIRouter(prefix="/api/shipments", tags=["shipments"])
 
@@ -32,6 +33,16 @@ def get_shipment(
     return shipment
 
 
+# Unicas transiciones que este endpoint permite (seccion 6 del master spec):
+#   assigned -> in_transit -> delivered
+# Cualquier otra combinacion se rechaza con 400, incluido `cancelled`: la
+# cancelacion no se hace por este endpoint.
+VALID_SHIPMENT_TRANSITIONS = {
+    OrderStatus.assigned: OrderStatus.in_transit,
+    OrderStatus.in_transit: OrderStatus.delivered,
+}
+
+
 @router.patch("/{shipment_id}/status", response_model=ShipmentOut)
 def update_shipment_status(
     shipment_id: uuid.UUID,
@@ -39,10 +50,37 @@ def update_shipment_status(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    shipment = db.query(Shipment).filter(Shipment.id == shipment_id).first()
+    # Decision de implementacion (no es un requisito textual del Spec):
+    # bloquear la fila del Shipment antes de validar la transicion, con el
+    # mismo patron que assign_shipment (Block 4). Asi, dos PATCH concurrentes
+    # sobre el mismo shipment no validan ambos contra el mismo estado de
+    # partida: el segundo espera, relee el estado ya actualizado y se valida
+    # contra ese.
+    shipment = (
+        db.query(Shipment)
+        .filter(Shipment.id == shipment_id)
+        .with_for_update()
+        .first()
+    )
     if shipment is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Envio no encontrado")
-    shipment.status = payload.status
+
+    if VALID_SHIPMENT_TRANSITIONS.get(shipment.status) != payload.status:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Transicion invalida: {shipment.status.value} -> {payload.status.value}",
+        )
+
+    if payload.status == OrderStatus.delivered:
+        # Estado terminal: libera exclusivamente el Vehicle/Driver referenciados
+        # por este shipment, fija actual_delivery y resetea delay_risk_score.
+        apply_terminal_state(shipment, OrderStatus.delivered, db)
+    else:
+        shipment.status = payload.status
+
+    # Los cambios operacionales del Shipment se reflejan en Order.status.
+    shipment.order.status = shipment.status
+
     db.commit()
     db.refresh(shipment)
     publish_shipment_status_changed(shipment.id, shipment.status)
