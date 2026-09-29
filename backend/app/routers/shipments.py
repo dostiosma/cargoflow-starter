@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -15,10 +15,22 @@ router = APIRouter(prefix="/api/shipments", tags=["shipments"])
 
 @router.get("", response_model=list[ShipmentOut])
 def list_shipments(
+    status_filter: OrderStatus | None = Query(default=None, alias="status"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return db.query(Shipment).order_by(Shipment.order_id).all()
+    """Lista los envios; `?status=` filtra por Shipment.status (secciones 7 y 9 del master spec).
+
+    Acepta un unico valor del enum de estados. Sin filtro devuelve todos, y sin
+    coincidencias devuelve []. Un valor invalido (mayusculas o vacio incluidos) lo
+    rechaza FastAPI con 422. El parametro interno se llama status_filter para no
+    tapar el modulo `status` importado de FastAPI.
+    """
+    query = db.query(Shipment)
+    if status_filter is not None:
+        # Shipment es la fuente de verdad del estado operacional (seccion 6)
+        query = query.filter(Shipment.status == status_filter)
+    return query.order_by(Shipment.order_id).all()
 
 
 @router.get("/{shipment_id}", response_model=ShipmentOut)

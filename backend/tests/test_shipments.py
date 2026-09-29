@@ -1,6 +1,8 @@
 import uuid
 from unittest.mock import MagicMock
 
+import pytest
+
 import app.routers.shipments as shipments_module
 from app.models import (
     Driver, DriverStatus, Order, OrderPriority, OrderStatus, Shipment, User, UserRole, Vehicle,
@@ -299,3 +301,110 @@ def test_update_shipment_status_mirrors_order_status(client, auth_headers, db_se
     assert response.status_code == 200
     db_session.refresh(order)
     assert order.status == OrderStatus.delivered
+
+
+# ---------------------------------------------------------------------------
+# GET /api/shipments?status= -- filtro opcional (Block 7A, secciones 7 y 9)
+# ---------------------------------------------------------------------------
+
+
+def _make_shipment(db_session, status_value, order_id=None):
+    """Crea un Order + Shipment en `status_value` (Shipment.order_id es unico: 1 Order = 1 Shipment)."""
+    order = Order(
+        id=order_id or uuid.uuid4(),
+        customer_name="Cliente Filtro",
+        origin_address="A",
+        destination_address="B",
+        priority=OrderPriority.normal,
+        status=status_value,
+    )
+    db_session.add(order)
+    db_session.commit()
+    db_session.refresh(order)
+
+    shipment = Shipment(order_id=order.id, status=status_value)
+    db_session.add(shipment)
+    db_session.commit()
+    db_session.refresh(shipment)
+    return shipment
+
+
+def test_list_shipments_filter_by_in_transit(client, auth_headers, db_session):
+    # Los in_transit se insertan a proposito fuera de orden para comprobar que el
+    # filtro conserva el order_by(order_id) existente.
+    in_transit = [
+        _make_shipment(db_session, OrderStatus.in_transit, order_id=uuid.UUID(int=3)),
+        _make_shipment(db_session, OrderStatus.in_transit, order_id=uuid.UUID(int=1)),
+        _make_shipment(db_session, OrderStatus.in_transit, order_id=uuid.UUID(int=2)),
+    ]
+    for other_status in (OrderStatus.pending, OrderStatus.assigned, OrderStatus.delivered, OrderStatus.cancelled):
+        _make_shipment(db_session, other_status)
+
+    response = client.get("/api/shipments", params={"status": "in_transit"}, headers=auth_headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert {s["id"] for s in body} == {str(s.id) for s in in_transit}
+    assert {s["status"] for s in body} == {"in_transit"}
+    assert [s["order_id"] for s in body] == [str(uuid.UUID(int=n)) for n in (1, 2, 3)]
+
+
+@pytest.mark.parametrize("status_value", ["pending", "assigned", "in_transit", "delivered", "cancelled"])
+def test_list_shipments_filter_accepts_every_status(client, auth_headers, db_session, status_value):
+    shipments_by_status = {s: _make_shipment(db_session, s) for s in OrderStatus}
+
+    response = client.get("/api/shipments", params={"status": status_value}, headers=auth_headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [s["id"] for s in body] == [str(shipments_by_status[OrderStatus(status_value)].id)]
+    assert body[0]["status"] == status_value
+
+
+def test_list_shipments_filter_without_matches_returns_empty_list(client, auth_headers, db_session):
+    _make_shipment(db_session, OrderStatus.pending)
+    _make_shipment(db_session, OrderStatus.assigned)
+
+    response = client.get("/api/shipments", params={"status": "delivered"}, headers=auth_headers)
+
+    # 200 con lista vacia, no 404: "sin envios en ese estado" es un caso normal
+    # (WF2 consulta ?status=in_transit cada 15 minutos).
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+@pytest.mark.parametrize(
+    "query_string",
+    [
+        pytest.param("status=no_existe", id="invalid_value"),
+        pytest.param("status=IN_TRANSIT", id="uppercase"),
+        pytest.param("status=", id="empty"),
+    ],
+)
+def test_list_shipments_filter_invalid_status_returns_422(client, auth_headers, db_session, query_string):
+    _make_shipment(db_session, OrderStatus.in_transit)
+
+    response = client.get(f"/api/shipments?{query_string}", headers=auth_headers)
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["query", "status"]
+
+
+def test_list_shipments_without_filter_returns_all_statuses(client, auth_headers, db_session):
+    shipments = [_make_shipment(db_session, s) for s in OrderStatus]
+
+    response = client.get("/api/shipments", headers=auth_headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == len(shipments)
+    assert {s["id"] for s in body} == {str(s.id) for s in shipments}
+    assert {s["status"] for s in body} == {s.value for s in OrderStatus}
+
+
+def test_list_shipments_filter_requires_auth(client, db_session):
+    _make_shipment(db_session, OrderStatus.in_transit)
+
+    response = client.get("/api/shipments", params={"status": "in_transit"})
+
+    assert response.status_code == 401
