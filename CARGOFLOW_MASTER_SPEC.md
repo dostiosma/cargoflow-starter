@@ -202,6 +202,8 @@ delay_risk_score = min(1.0, risk_crudo)
 
 `tiempo_transcurrido` y `tiempo_estimado` se miden desde `assigned_at` (ver "ETA operacional"). El componente temporal domina la fórmula; `priority == "critical"` adelanta la alerta, no la reemplaza. Alerta cuando `delay_risk_score > 0.7` (sección 9).
 
+`delay_risk_score` solo se actualiza mientras el Shipment está en `in_transit`: `PATCH /api/shipments/{id}/risk` responde 400 en cualquier otro estado (contrato completo en la sección 7).
+
 ### Convención de nombres
 Backend, base de datos y el contrato de API JSON: **snake_case**, siempre. El frontend en React/TypeScript puede usar camelCase en su propio código interno, pero al hablar con la API respeta snake_case tal como está definido en la sección 7 — no hay traducción de campos entre capas. Esto evita el problema de `user_id` / `userId` / `idUser` conviviendo en el mismo sistema.
 
@@ -229,6 +231,38 @@ Backend, base de datos y el contrato de API JSON: **snake_case**, siempre. El fr
 | POST | /api/webhooks/order-created | Dispara automatización interna | n8n (consume) |
 
 Ningún chat/agente inventa un endpoint o campo que no esté en esta tabla. Si hace falta uno nuevo, se agrega aquí primero.
+
+### `PATCH /api/shipments/{id}/risk` — body y respuestas
+
+Body (obligatorio):
+
+```json
+{
+  "delay_risk_score": "float, 0–1"
+}
+```
+
+`delay_risk_score` es obligatorio y debe ser un float dentro del rango 0–1, ambos extremos incluidos.
+
+Solo se actualiza con el Shipment en `in_transit`:
+
+| Estado del Shipment | Resultado |
+|---|---|
+| `in_transit` | Permitido — actualiza `delay_risk_score` |
+| `pending` | 400 |
+| `assigned` | 400 |
+| `delivered` | 400 |
+| `cancelled` | 400 |
+
+Respuestas:
+
+| Código | Cuándo |
+|---|---|
+| 200 | Shipment actualizado (`ShipmentOut`) |
+| 400 | El Shipment no está en `in_transit` |
+| 401 | Autenticación ausente o inválida |
+| 404 | Shipment inexistente |
+| 422 | Body inválido o `delay_risk_score` fuera del rango 0–1 |
 
 ---
 
