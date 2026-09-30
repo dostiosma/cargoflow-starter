@@ -5,9 +5,9 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.deps import get_current_user
-from app.events import publish_shipment_status_changed
+from app.events import publish_shipment_risk_alert, publish_shipment_status_changed
 from app.models import Order, OrderStatus, Shipment, User
-from app.schemas import ShipmentOut, ShipmentStatusUpdate
+from app.schemas import ShipmentOut, ShipmentRiskUpdate, ShipmentStatusUpdate
 from app.shipment_lifecycle import apply_terminal_state
 
 router = APIRouter(prefix="/api/shipments", tags=["shipments"])
@@ -96,6 +96,60 @@ def update_shipment_status(
     db.commit()
     db.refresh(shipment)
     publish_shipment_status_changed(shipment.id, shipment.status)
+    return shipment
+
+
+# Umbral de alerta de riesgo (secciones 6, 8 y 9 del master spec): el evento
+# risk_alert se publica solo cuando delay_risk_score es ESTRICTAMENTE mayor.
+RISK_ALERT_THRESHOLD = 0.7
+
+
+@router.patch("/{shipment_id}/risk", response_model=ShipmentOut)
+def update_shipment_risk(
+    shipment_id: uuid.UUID,
+    payload: ShipmentRiskUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Persiste delay_risk_score calculado por n8n (secciones 6, 7 y 9 del master spec).
+
+    Solo se actualiza con el Shipment en `in_transit`; en cualquier otro estado
+    responde 400. El rango 0-1 (extremos incluidos) lo valida ShipmentRiskUpdate:
+    un body invalido o un valor fuera de rango responde 422 antes de llegar aqui.
+    """
+    # Decision de implementacion (no es un requisito textual del Spec): bloquear
+    # la fila del Shipment antes de validar el estado, con el mismo patron que
+    # update_shipment_status y assign_shipment. Asi un PATCH concurrente a
+    # delivered/cancelled no deja un score no nulo en un shipment que ya es
+    # terminal (seccion 6: delay_risk_score vuelve a null).
+    shipment = (
+        db.query(Shipment)
+        .filter(Shipment.id == shipment_id)
+        .with_for_update()
+        .first()
+    )
+    if shipment is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Envio no encontrado")
+
+    if shipment.status != OrderStatus.in_transit:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Solo se puede actualizar el riesgo de un envio en in_transit "
+                f"(estado actual: {shipment.status.value})"
+            ),
+        )
+
+    shipment.delay_risk_score = payload.delay_risk_score
+
+    db.commit()
+    db.refresh(shipment)
+
+    # Primero commit, despues evento: nunca se publica un risk_alert sobre un
+    # cambio que no quedo persistido (seccion 8). Un fallo de Redis lo absorbe
+    # events.py y no afecta a esta respuesta.
+    if shipment.delay_risk_score > RISK_ALERT_THRESHOLD:
+        publish_shipment_risk_alert(shipment.id, shipment.delay_risk_score)
     return shipment
 
 

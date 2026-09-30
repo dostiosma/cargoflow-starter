@@ -1,8 +1,11 @@
+import json
 import uuid
 from unittest.mock import MagicMock
 
 import pytest
+import redis
 
+import app.events as events_module
 import app.routers.shipments as shipments_module
 from app.models import (
     Driver, DriverStatus, Order, OrderPriority, OrderStatus, Shipment, User, UserRole, Vehicle,
@@ -408,3 +411,267 @@ def test_list_shipments_filter_requires_auth(client, db_session):
     response = client.get("/api/shipments", params={"status": "in_transit"})
 
     assert response.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# PATCH /api/shipments/{id}/risk -- persistir delay_risk_score (Block 7B, secciones 6, 7 y 8)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def risk_publish_mocks(monkeypatch):
+    """Reemplaza ambos publishers del router de shipments (no toca Redis real)."""
+    risk_alert = MagicMock()
+    status_changed = MagicMock()
+    monkeypatch.setattr(shipments_module, "publish_shipment_risk_alert", risk_alert)
+    monkeypatch.setattr(shipments_module, "publish_shipment_status_changed", status_changed)
+    return risk_alert, status_changed
+
+
+def _patch_risk(client, auth_headers, shipment_id, body):
+    return client.patch(f"/api/shipments/{shipment_id}/risk", json=body, headers=auth_headers)
+
+
+def _make_in_transit_shipment(db_session, delay_risk_score=None):
+    """Shipment in_transit, opcionalmente con un score previo (para comprobar que NO cambia)."""
+    shipment = _make_shipment(db_session, OrderStatus.in_transit)
+    if delay_risk_score is not None:
+        shipment.delay_risk_score = delay_risk_score
+        db_session.commit()
+        db_session.refresh(shipment)
+    return shipment
+
+
+def test_update_shipment_risk_persists_score(client, auth_headers, db_session, risk_publish_mocks):
+    risk_alert, status_changed = risk_publish_mocks
+    shipment = _make_shipment(db_session, OrderStatus.in_transit)
+
+    response = _patch_risk(client, auth_headers, shipment.id, {"delay_risk_score": 0.9})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == str(shipment.id)
+    assert body["status"] == "in_transit"
+    assert body["delay_risk_score"] == 0.9
+    db_session.refresh(shipment)
+    assert shipment.delay_risk_score == 0.9
+    assert shipment.status == OrderStatus.in_transit
+    # Solo cambia delay_risk_score: el Order (y su estado) no se toca
+    assert shipment.order.status == OrderStatus.in_transit
+    risk_alert.assert_called_once_with(shipment.id, 0.9)
+    status_changed.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "score, alerts",
+    [(0.0, False), (0.5, False), (0.7, False), (0.71, True), (1.0, True)],
+)
+def test_update_shipment_risk_alerts_only_above_threshold(
+    client, auth_headers, db_session, risk_publish_mocks, score, alerts
+):
+    # 0.0 y 1.0 son los extremos validos del rango; 0.7 exacto NO alerta (> 0.7 estricto).
+    risk_alert, status_changed = risk_publish_mocks
+    shipment = _make_shipment(db_session, OrderStatus.in_transit)
+
+    response = _patch_risk(client, auth_headers, shipment.id, {"delay_risk_score": score})
+
+    assert response.status_code == 200
+    db_session.refresh(shipment)
+    assert shipment.delay_risk_score == score
+    if alerts:
+        risk_alert.assert_called_once_with(shipment.id, score)
+    else:
+        risk_alert.assert_not_called()
+    status_changed.assert_not_called()
+
+
+@pytest.mark.parametrize("score", [-0.01, 1.01, 2])
+def test_update_shipment_risk_out_of_range_returns_422(
+    client, auth_headers, db_session, risk_publish_mocks, score
+):
+    risk_alert, status_changed = risk_publish_mocks
+    shipment = _make_in_transit_shipment(db_session, delay_risk_score=0.4)
+
+    response = _patch_risk(client, auth_headers, shipment.id, {"delay_risk_score": score})
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["body", "delay_risk_score"]
+    db_session.refresh(shipment)
+    assert shipment.delay_risk_score == 0.4
+    risk_alert.assert_not_called()
+    status_changed.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param({}, id="missing_field"),
+        pytest.param({"delay_risk_score": None}, id="null"),
+        pytest.param({"delay_risk_score": "abc"}, id="non_numeric_string"),
+        pytest.param({"delay_risk_score": []}, id="list"),
+    ],
+)
+def test_update_shipment_risk_invalid_body_returns_422(
+    client, auth_headers, db_session, risk_publish_mocks, body
+):
+    risk_alert, status_changed = risk_publish_mocks
+    shipment = _make_in_transit_shipment(db_session, delay_risk_score=0.4)
+
+    response = _patch_risk(client, auth_headers, shipment.id, body)
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["body", "delay_risk_score"]
+    db_session.refresh(shipment)
+    assert shipment.delay_risk_score == 0.4
+    risk_alert.assert_not_called()
+    status_changed.assert_not_called()
+
+
+def test_update_shipment_risk_not_found(client, auth_headers, risk_publish_mocks):
+    risk_alert, status_changed = risk_publish_mocks
+
+    response = _patch_risk(client, auth_headers, uuid.uuid4(), {"delay_risk_score": 0.9})
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Envio no encontrado"
+    risk_alert.assert_not_called()
+    status_changed.assert_not_called()
+
+
+def test_update_shipment_risk_invalid_body_is_rejected_before_lookup(
+    client, auth_headers, db_session, risk_publish_mocks
+):
+    # El body se valida (Pydantic) antes de buscar el shipment ni mirar su estado:
+    # un valor fuera de rango responde 422 aunque el id no exista (no 404) o el
+    # shipment no este en in_transit (no 400).
+    risk_alert, status_changed = risk_publish_mocks
+    pending = _make_shipment(db_session, OrderStatus.pending)
+
+    assert _patch_risk(client, auth_headers, uuid.uuid4(), {"delay_risk_score": 2}).status_code == 422
+    assert _patch_risk(client, auth_headers, pending.id, {"delay_risk_score": 2}).status_code == 422
+    risk_alert.assert_not_called()
+    status_changed.assert_not_called()
+
+
+@pytest.mark.parametrize("status_value", ["pending", "assigned", "delivered", "cancelled"])
+def test_update_shipment_risk_rejects_non_in_transit(
+    client, auth_headers, db_session, risk_publish_mocks, status_value
+):
+    risk_alert, status_changed = risk_publish_mocks
+    shipment = _make_shipment(db_session, OrderStatus(status_value))
+
+    response = _patch_risk(client, auth_headers, shipment.id, {"delay_risk_score": 0.9})
+
+    assert response.status_code == 400
+    db_session.refresh(shipment)
+    assert shipment.delay_risk_score is None
+    assert shipment.status == OrderStatus(status_value)
+    risk_alert.assert_not_called()
+    status_changed.assert_not_called()
+
+
+def test_update_shipment_risk_requires_auth(client, db_session, risk_publish_mocks):
+    risk_alert, status_changed = risk_publish_mocks
+    shipment = _make_in_transit_shipment(db_session, delay_risk_score=0.4)
+
+    response = client.patch(f"/api/shipments/{shipment.id}/risk", json={"delay_risk_score": 0.9})
+
+    assert response.status_code == 401
+    db_session.refresh(shipment)
+    assert shipment.delay_risk_score == 0.4
+    risk_alert.assert_not_called()
+    status_changed.assert_not_called()
+
+
+def test_update_shipment_risk_publishes_exact_risk_alert_payload(
+    client, auth_headers, db_session, monkeypatch
+):
+    # Publisher REAL (events.py) contra un cliente Redis falso: comprueba el cableado
+    # completo endpoint -> publish_shipment_risk_alert -> payload exacto de la seccion 8.
+    fake_client = MagicMock()
+    monkeypatch.setattr(events_module.redis, "from_url", lambda url: fake_client)
+    shipment = _make_shipment(db_session, OrderStatus.in_transit)
+
+    response = _patch_risk(client, auth_headers, shipment.id, {"delay_risk_score": 0.9})
+
+    assert response.status_code == 200
+    # Un unico evento en total: el risk_alert (ningun status_changed)
+    fake_client.publish.assert_called_once()
+    channel, payload = fake_client.publish.call_args[0]
+    assert channel == "shipment.status.changed"
+    assert json.loads(payload) == {
+        "type": "risk_alert",
+        "shipment_id": str(shipment.id),
+        "delay_risk_score": 0.9,
+    }
+
+
+def test_update_shipment_risk_publishes_event_after_commit(client, auth_headers, db_session, monkeypatch):
+    shipment = _make_shipment(db_session, OrderStatus.in_transit)
+
+    calls = []
+    original_commit = db_session.commit
+
+    def spy_commit():
+        calls.append("commit")
+        return original_commit()
+
+    monkeypatch.setattr(db_session, "commit", spy_commit)
+    monkeypatch.setattr(
+        shipments_module, "publish_shipment_risk_alert", lambda *args, **kwargs: calls.append("publish")
+    )
+
+    response = _patch_risk(client, auth_headers, shipment.id, {"delay_risk_score": 0.9})
+
+    assert response.status_code == 200
+    # un solo commit, y el evento va despues de el
+    assert calls == ["commit", "publish"]
+
+
+def test_update_shipment_risk_does_not_publish_when_commit_fails(
+    client, auth_headers, db_session, risk_publish_mocks, monkeypatch
+):
+    # Si el commit falla, el cambio no quedo persistido: no debe publicarse ningun evento.
+    risk_alert, status_changed = risk_publish_mocks
+    shipment = _make_shipment(db_session, OrderStatus.in_transit)
+
+    def failing_commit():
+        raise RuntimeError("commit fallido")
+
+    monkeypatch.setattr(db_session, "commit", failing_commit)
+
+    with pytest.raises(RuntimeError, match="commit fallido"):
+        _patch_risk(client, auth_headers, shipment.id, {"delay_risk_score": 0.9})
+
+    risk_alert.assert_not_called()
+    status_changed.assert_not_called()
+
+
+def test_update_shipment_risk_survives_redis_failure(client, auth_headers, db_session, monkeypatch):
+    # Publisher real con Redis caido: events.py absorbe el RedisError y la respuesta sigue siendo 200.
+    def broken_from_url(*args, **kwargs):
+        raise redis.ConnectionError("redis caido")
+
+    monkeypatch.setattr(events_module.redis, "from_url", broken_from_url)
+    shipment = _make_shipment(db_session, OrderStatus.in_transit)
+
+    response = _patch_risk(client, auth_headers, shipment.id, {"delay_risk_score": 0.9})
+
+    assert response.status_code == 200
+    assert response.json()["delay_risk_score"] == 0.9
+    db_session.refresh(shipment)
+    assert shipment.delay_risk_score == 0.9
+
+
+def test_update_shipment_risk_overwrites_previous_score(client, auth_headers, db_session, risk_publish_mocks):
+    # WF2 recalcula cada 15 minutos: el ultimo valor reemplaza al anterior.
+    risk_alert, _ = risk_publish_mocks
+    shipment = _make_shipment(db_session, OrderStatus.in_transit)
+
+    assert _patch_risk(client, auth_headers, shipment.id, {"delay_risk_score": 0.3}).status_code == 200
+    assert _patch_risk(client, auth_headers, shipment.id, {"delay_risk_score": 0.9}).status_code == 200
+
+    db_session.refresh(shipment)
+    assert shipment.delay_risk_score == 0.9
+    # 0.3 no alerta; 0.9 si
+    risk_alert.assert_called_once_with(shipment.id, 0.9)

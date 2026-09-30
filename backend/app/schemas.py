@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, EmailStr
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from app.models import OrderPriority, OrderStatus
 
@@ -89,6 +89,11 @@ class ShipmentCreate(BaseModel):
 
 class ShipmentStatusUpdate(BaseModel):
     status: ShipmentStatus
+
+
+class ShipmentRiskUpdate(BaseModel):
+    # Seccion 7 del master spec: obligatorio, float dentro de 0-1 (extremos incluidos)
+    delay_risk_score: float = Field(ge=0, le=1)
 
 
 class ShipmentOut(BaseModel):
