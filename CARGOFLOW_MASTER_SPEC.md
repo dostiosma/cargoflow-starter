@@ -123,7 +123,7 @@ FastAPI es el único dueño de la lógica de negocio y de PostgreSQL. Node.js y 
 | Campo | Tipo | Notas |
 |---|---|---|
 | id | UUID | PK |
-| user_id | UUID | FK → users |
+| user_id | UUID | FK → users, único (1 User → 1 Driver) |
 | name | string | |
 | phone | string | |
 | vehicle_id | UUID | FK → vehicles, nullable |
@@ -204,6 +204,12 @@ delay_risk_score = min(1.0, risk_crudo)
 
 `delay_risk_score` solo se actualiza mientras el Shipment está en `in_transit`: `PATCH /api/shipments/{id}/risk` responde 400 en cualquier otro estado (contrato completo en la sección 7).
 
+### Día operativo
+
+Los timestamps se almacenan en UTC. El **día operativo** es el día calendario de la zona horaria `America/Bogota`: va de las 00:00 (inclusive) a las 00:00 del día siguiente (exclusive) en esa zona, y sus límites se convierten a UTC para compararlos con los timestamps almacenados. El **día operativo en curso** es el que contiene el instante de la consulta.
+
+Es la definición de "día" del spec: cualquier regla que hable "del día" la referencia en lugar de redefinirla.
+
 ### Convención de nombres
 Backend, base de datos y el contrato de API JSON: **snake_case**, siempre. El frontend en React/TypeScript puede usar camelCase en su propio código interno, pero al hablar con la API respeta snake_case tal como está definido en la sección 7 — no hay traducción de campos entre capas. Esto evita el problema de `user_id` / `userId` / `idUser` conviviendo en el mismo sistema.
 
@@ -214,6 +220,7 @@ Backend, base de datos y el contrato de API JSON: **snake_case**, siempre. El fr
 | Método | Ruta | Descripción | Usado por |
 |---|---|---|---|
 | POST | /api/auth/login | Login, devuelve JWT | React, Flutter |
+| GET | /api/auth/me | Contexto del usuario autenticado (contrato abajo) | Flutter |
 | GET | /api/orders | Listar pedidos | React |
 | POST | /api/orders | Crear pedido (crea también su Shipment asociado, misma transacción) | React |
 | GET | /api/orders/{id} | Detalle de pedido | React |
@@ -263,6 +270,83 @@ Respuestas:
 | 401 | Autenticación ausente o inválida |
 | 404 | Shipment inexistente |
 | 422 | Body inválido o `delay_risk_score` fuera del rango 0–1 |
+
+### `GET /api/auth/me` — respuesta
+
+Devuelve el contexto del usuario autenticado (el del JWT), únicamente con estos campos:
+
+```json
+{
+  "id": "UUID",
+  "email": "string",
+  "role": "admin | driver",
+  "driver_id": "UUID | null"
+}
+```
+
+- `id` es el `User.id` del usuario autenticado.
+- `driver_id` es el `Driver.id` asociado al usuario (relación 1:1, sección 6), o `null` si el usuario no tiene Driver asociado.
+
+El `{id}` de `GET /api/drivers/{id}/shipments` corresponde a `driver_id` (es decir, a `Driver.id`), no a `User.id`.
+
+Respuestas:
+
+| Código | Cuándo |
+|---|---|
+| 200 | Contexto del usuario autenticado |
+| 401 | Autenticación ausente o inválida |
+
+### `GET /api/drivers/{id}/shipments` — ruta del conductor
+
+`{id}` es el `Driver.id` (UUID), no el `User.id`.
+
+La ruta incluye los Shipments con `driver_id = {id}` que sean:
+
+1. **Activos**: en estado `assigned` o `in_transit`.
+2. **Terminales** (`delivered` o `cancelled`) cuya `actual_delivery` cae dentro del día operativo en curso (sección 6).
+
+No se filtra por estado dentro de esos dos grupos: un `cancelled` terminado durante el día permanece visible. No hay parámetro `?date=`.
+
+Orden: `assigned_at` ascendente; desempate por `id` ascendente.
+
+Cada elemento de la lista usa este esquema propio de la ruta (`ShipmentOut` no se reutiliza ni se modifica):
+
+```json
+{
+  "id": "UUID",
+  "status": "assigned | in_transit | delivered | cancelled",
+  "assigned_at": "timestamp",
+  "estimated_delivery": "timestamp",
+  "actual_delivery": "timestamp | null",
+  "order": {
+    "customer_name": "string",
+    "origin_address": "string",
+    "destination_address": "string",
+    "priority": "normal | high | critical"
+  }
+}
+```
+
+`id`, `status`, `assigned_at`, `estimated_delivery` y `actual_delivery` son los campos homónimos del Shipment (sección 6); `order` es un resumen mínimo del Order del Shipment con campos ya existentes (sección 6). No se incluyen otros campos.
+
+Autorización:
+
+| Usuario | Resultado |
+|---|---|
+| `admin` | Puede consultar cualquier Driver |
+| `driver` | Solo su propio `driver_id` (el de `GET /api/auth/me`); otro `{id}` → 403 |
+
+La propiedad se comprueba antes de consultar si el Driver existe: un `driver` que pida un `{id}` ajeno recibe 403 exista o no ese Driver, por lo que el 404 solo se observa con rol `admin`. Un usuario `driver` sin Driver asociado no puede consultar ninguna ruta.
+
+Respuestas:
+
+| Código | Cuándo |
+|---|---|
+| 200 | Lista de la ruta; `[]` si el Driver existe y no tiene Shipments en la ruta |
+| 401 | Autenticación ausente o inválida |
+| 403 | Usuario `driver` consultando un `{id}` que no es el suyo |
+| 404 | Driver inexistente |
+| 422 | `{id}` no es un UUID válido |
 
 ---
 
@@ -329,6 +413,7 @@ React discrimina el `type` recibido antes de interpretarlo, y actualiza el dashb
 - Contraseñas con bcrypt, nunca en texto plano
 - Variables sensibles en `.env`, nunca commiteadas (`.env.example` sí va en el repo)
 - CORS configurado explícitamente para los orígenes conocidos (no `*`)
+- Autorización por rol y propiedad: solo está definida para `GET /api/drivers/{id}/shipments` (sección 7). Para el resto de endpoints queda pendiente de una decisión de seguridad separada.
 
 ---
 
