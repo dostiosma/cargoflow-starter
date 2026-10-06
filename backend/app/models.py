@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String
+from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import relationship
 
@@ -74,6 +74,9 @@ class Vehicle(Base):
 
 class Driver(Base):
     __tablename__ = "drivers"
+    # Spec seccion 6: relacion User -> Driver 1:1. El nombre coincide con el de la
+    # migracion 0002 para que una base nueva y una migrada queden iguales.
+    __table_args__ = (UniqueConstraint("user_id", name="uq_drivers_user_id"),)
 
     id = Column(GUID(), primary_key=True, default=uuid.uuid4)
     user_id = Column(GUID(), ForeignKey("users.id"), nullable=False)

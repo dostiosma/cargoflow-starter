@@ -3,7 +3,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
-from app.models import OrderPriority, OrderStatus
+from app.models import OrderPriority, OrderStatus, UserRole
 
 
 class LoginRequest(BaseModel):
@@ -24,6 +24,15 @@ class UserOut(BaseModel):
     email: str
     role: str
     created_at: datetime
+
+
+class MeOut(BaseModel):
+    # Spec seccion 7, GET /api/auth/me: unicamente estos cuatro campos.
+    # id = User.id; driver_id = Driver.id asociado al usuario, o null (clave siempre presente).
+    id: uuid.UUID
+    email: str
+    role: UserRole
+    driver_id: uuid.UUID | None
 
 
 class OrderCreate(BaseModel):

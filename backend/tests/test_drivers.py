@@ -1,3 +1,7 @@
+import pytest
+from sqlalchemy import UniqueConstraint
+from sqlalchemy.exc import IntegrityError
+
 from app.models import Driver, DriverStatus, User, UserRole
 
 
@@ -24,3 +28,34 @@ def test_list_drivers(client, auth_headers, db_session):
 def test_list_drivers_requires_auth(client):
     response = client.get("/api/drivers")
     assert response.status_code == 401
+
+
+# --- Unicidad de drivers.user_id (spec seccion 6, D8-A) ---
+
+
+def test_driver_user_id_must_be_unique(db_session):
+    user = User(email="unico@example.com", password_hash="x", role=UserRole.driver)
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+
+    db_session.add(Driver(user_id=user.id, name="Primero", status=DriverStatus.available))
+    db_session.commit()
+
+    db_session.add(Driver(user_id=user.id, name="Duplicado", status=DriverStatus.offline))
+    with pytest.raises(IntegrityError):
+        db_session.commit()
+    db_session.rollback()
+
+    drivers = db_session.query(Driver).filter(Driver.user_id == user.id).all()
+    assert [d.name for d in drivers] == ["Primero"]
+
+
+def test_driver_user_id_constraint_name_matches_migration():
+    # El nombre debe coincidir con backend/migrations/0002_drivers_user_id_unique.sql
+    constraints = {
+        c.name: [col.name for col in c.columns]
+        for c in Driver.__table__.constraints
+        if isinstance(c, UniqueConstraint)
+    }
+    assert constraints.get("uq_drivers_user_id") == ["user_id"]
