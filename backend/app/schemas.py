@@ -127,3 +127,27 @@ class ShipmentAssignResponse(BaseModel):
     driver_id: uuid.UUID | None = None
     status: ShipmentStatus
     message: str
+
+
+class DriverRouteOrderOut(BaseModel):
+    # Spec seccion 7, GET /api/drivers/{id}/shipments: resumen minimo del Order.
+    model_config = ConfigDict(from_attributes=True)
+
+    customer_name: str
+    origin_address: str
+    destination_address: str
+    priority: OrderPriority
+
+
+class DriverRouteShipmentOut(BaseModel):
+    # Esquema propio de la ruta del conductor (ShipmentOut no se reutiliza).
+    # assigned_at y estimated_delivery son obligatorios, como en el spec;
+    # actual_delivery siempre esta presente y vale null mientras no hay entrega.
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    status: ShipmentStatus
+    assigned_at: datetime
+    estimated_delivery: datetime
+    actual_delivery: datetime | None
+    order: DriverRouteOrderOut
