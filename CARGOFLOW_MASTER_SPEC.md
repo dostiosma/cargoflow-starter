@@ -222,7 +222,7 @@ Backend, base de datos y el contrato de API JSON: **snake_case**, siempre. El fr
 | POST | /api/auth/login | Login, devuelve JWT | React, Flutter |
 | GET | /api/auth/me | Contexto del usuario autenticado (contrato abajo) | Flutter |
 | GET | /api/orders | Listar pedidos | React |
-| POST | /api/orders | Crear pedido (crea también su Shipment asociado, misma transacción) | React |
+| POST | /api/orders | Crear pedido (crea también su Shipment asociado, misma transacción; después del commit se programa el aviso a n8n definido en la sección 9) | React |
 | GET | /api/orders/{id} | Detalle de pedido | React |
 | PATCH | /api/orders/{id}/status | Cancelación administrativa (ver "Máquina de estados operacional", sección 6) | React, n8n |
 | GET | /api/shipments | Listar envíos (filtro opcional `?status=`) | React, n8n |
@@ -235,7 +235,8 @@ Backend, base de datos y el contrato de API JSON: **snake_case**, siempre. El fr
 | GET | /api/drivers | Listar conductores | React, n8n |
 | GET | /api/drivers/{id}/shipments | Ruta del día del conductor | Flutter |
 | GET | /api/reports/daily | Métricas del día | React, n8n |
-| POST | /api/webhooks/order-created | Dispara automatización interna | n8n (consume) |
+
+El aviso de pedido creado a n8n no es un endpoint de FastAPI: es una llamada saliente de FastAPI hacia n8n, definida en la sección 9.
 
 Ningún chat/agente inventa un endpoint o campo que no esté en esta tabla. Si hace falta uno nuevo, se agrega aquí primero.
 
@@ -399,6 +400,7 @@ React discrimina el `type` recibido antes de interpretarlo, y actualiza el dashb
 
 **WF1 — Asignación automática**
 `Webhook (pedido creado) → POST /api/shipments/{id}/assign → notificar`
+El disparador es el aviso de pedido creado que FastAPI envía a n8n (subsección «Aviso de pedido creado (FastAPI → n8n)», más abajo).
 
 **WF2 — Riesgo de retraso**
 `Cron cada 15 min → GET /api/shipments?status=in_transit → n8n calcula delay_risk_score → PATCH /api/shipments/{id}/risk → FastAPI persiste, confirma (commit) y publica el evento risk_alert si delay_risk_score > 0.7 (sección 8) — n8n nunca publica el evento directamente`
@@ -406,12 +408,45 @@ React discrimina el `type` recibido antes de interpretarlo, y actualiza el dashb
 **WF3 — Reporte diario** *(stretch, no bloquea el MVP)*
 `Cron 18:00 → GET /reports/daily → armar resumen → enviar por email`
 
+### Aviso de pedido creado (FastAPI → n8n)
+
+Es una llamada HTTP saliente de FastAPI hacia n8n, no un endpoint de la sección 7. n8n la recibe en el nodo Webhook de WF1 y sigue sin escribir en PostgreSQL (sección 4).
+
+**Cuándo.** `POST /api/orders` crea el Order y su Shipment en una misma transacción (sección 7). Solo después de confirmar el commit, FastAPI programa el envío del aviso con `BackgroundTasks`; nunca antes (misma regla que los eventos de la sección 8). La respuesta `201` no depende de la entrega del aviso: un fallo de comunicación no revierte la transacción ni modifica la respuesta.
+
+**Destino.** `POST {N8N_WEBHOOK_URL}/order-created`. `N8N_WEBHOOK_URL` (variable de entorno existente) es la URL base de los webhooks de n8n. Si no está configurada, no se intenta enviar el aviso y se registra el problema en el log.
+
+**Cuerpo** (JSON, `snake_case`):
+
+```json
+{
+  "order_id": "UUID",
+  "shipment_id": "UUID"
+}
+```
+
+Contiene exclusivamente esos dos campos: no hay campo `event` ni otros. `shipment_id` es el Shipment creado junto con el Order; WF1 lo usa como `{id}` en `POST /api/shipments/{id}/assign`. Si WF1 necesita más datos, los consulta a la API.
+
+**Autenticación.** La llamada incluye la cabecera `X-Webhook-Secret` con el valor de la variable de entorno `N8N_WEBHOOK_SECRET`. El nodo Webhook de n8n la valida con una credencial Header Auth. El mismo secreto debe estar configurado en ambos lados (FastAPI y n8n). Esta autenticación protege solo la recepción del aviso; la autenticación de n8n hacia FastAPI es un tema distinto y sigue pendiente (sección 10).
+
+**Entrega (MVP).** Best-effort: FastAPI realiza un único intento por cada creación de pedido, sin reintentos automáticos, y no existe Transactional Outbox. El spec no garantiza la entrega del aviso. La implementación de este envío (D9-B) deberá:
+
+- utilizar un timeout HTTP finito (este documento no fija su valor);
+- considerar respuesta exitosa cualquier respuesta 2xx de n8n;
+- registrar en el log las respuestas no 2xx y los errores de comunicación;
+- no alterar el `201` de `POST /api/orders` en ningún caso.
+
+**Recuperación.** Si el aviso no llega, el Shipment permanece en `pending`. WF1 tendrá un Cron que recuperará las asignaciones pendientes; su contrato detallado queda por definir y se documentará en esta sección antes de implementarlo. Recuperar asignaciones no es lo mismo que garantizar notificaciones.
+
+**Notificaciones duplicadas.** La idempotencia de `POST /api/shipments/{id}/assign` impide asignar dos veces el mismo Shipment, pero por sí sola no evita notificaciones duplicadas. Para distinguir una asignación nueva de una repetida, la respuesta de `POST /api/shipments/{id}/assign` incluirá el campo `assignment_created` (contrato aprobado, pendiente de implementación en D9-C1): `true` cuando esa petición realizó una asignación nueva y `false` cuando la asignación ya existía. WF1 notificará únicamente cuando sea `true`.
+
 ---
 
 ## 10. Seguridad (nivel MVP, pero real)
 - JWT con expiración corta + refresh token
 - Contraseñas con bcrypt, nunca en texto plano
 - Variables sensibles en `.env`, nunca commiteadas (`.env.example` sí va en el repo)
+- `N8N_WEBHOOK_SECRET` es una variable sensible: se define en `.env` y nunca se escribe su valor en este documento ni en archivos versionados. Protege la recepción del aviso FastAPI → n8n (cabecera `X-Webhook-Secret`, sección 9) y debe coincidir con la credencial Header Auth configurada en n8n. No es la autenticación de n8n hacia FastAPI, que sigue pendiente de una decisión de seguridad separada.
 - CORS configurado explícitamente para los orígenes conocidos (no `*`)
 - Autorización por rol y propiedad: solo está definida para `GET /api/drivers/{id}/shipments` (sección 7). Para el resto de endpoints queda pendiente de una decisión de seguridad separada.
 
@@ -430,6 +465,8 @@ docker-compose.yml
 ```
 
 Objetivo: `docker compose up --build` levanta todo, sin pasos manuales adicionales.
+
+Dentro de `docker compose`, el backend alcanza a n8n por el nombre del servicio: `N8N_WEBHOOK_URL=http://n8n:5678/webhook`. `localhost` dentro del contenedor del backend apunta al propio backend, no a n8n. `http://localhost:5678/webhook` solo es válido cuando el backend se ejecuta directamente en el host, donde n8n publica el puerto 5678.
 
 ---
 
@@ -457,6 +494,7 @@ La duración de cada sprint depende de las horas por semana disponibles — no h
 
 ## 14. Definition of Done
 - Cada endpoint de la sección 7 tiene al menos un test.
+- El aviso de pedido creado (sección 9) debe tener pruebas de: su payload; la cabecera `X-Webhook-Secret`; que se ejecuta después del commit; la ausencia de `N8N_WEBHOOK_URL` (no se intenta enviar); una respuesta HTTP no 2xx; y un timeout o error de comunicación. En los casos de fallo, el `201` de `POST /api/orders` no se ve afectado.
 - `docker compose up --build` levanta el sistema completo sin pasos manuales.
 - El README explica cómo correrlo y qué decisiones se tomaron, y por qué.
 - Puedes explicar cada decisión de este documento sin tenerlo abierto.
