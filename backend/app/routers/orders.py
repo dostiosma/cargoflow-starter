@@ -1,12 +1,13 @@
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.deps import get_current_user
 from app.events import publish_shipment_status_changed
 from app.models import Order, OrderStatus, Shipment, User
+from app.n8n_client import notify_order_created
 from app.schemas import OrderCreate, OrderOut, OrderStatusUpdate
 from app.shipment_lifecycle import apply_terminal_state
 
@@ -16,6 +17,7 @@ router = APIRouter(prefix="/api/orders", tags=["orders"])
 @router.post("", response_model=OrderOut, status_code=status.HTTP_201_CREATED)
 def create_order(
     payload: OrderCreate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -27,9 +29,19 @@ def create_order(
     )
     db.add(order)
     db.flush()  # asigna order.id sin cerrar la transaccion
-    db.add(Shipment(order_id=order.id))  # status=pending por default del modelo
+    shipment = Shipment(order_id=order.id)  # status=pending por default del modelo
+    db.add(shipment)
+    db.flush()  # asigna shipment.id sin cerrar la transaccion
+    # Se guardan antes del commit: despues del commit los atributos expiran.
+    order_id, shipment_id = order.id, shipment.id
     db.commit()  # un solo commit: Order y Shipment en la misma transaccion (D1)
     db.refresh(order)
+    # Aviso a n8n (seccion 9 del master spec). SOLO se programa cuando commit y
+    # refresh ya terminaron bien: si cualquiera de los dos lanza, esta linea no se
+    # ejecuta. La tarea corre despues de enviar la respuesta, recibe solo ids
+    # (nunca la sesion de base de datos) y sus fallos no afectan al 201 ni al
+    # pedido ya confirmado.
+    background_tasks.add_task(notify_order_created, order_id, shipment_id)
     return order
 
 

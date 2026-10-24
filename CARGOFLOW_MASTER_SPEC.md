@@ -414,7 +414,7 @@ Es una llamada HTTP saliente de FastAPI hacia n8n, no un endpoint de la sección
 
 **Cuándo.** `POST /api/orders` crea el Order y su Shipment en una misma transacción (sección 7). Solo después de confirmar el commit, FastAPI programa el envío del aviso con `BackgroundTasks`; nunca antes (misma regla que los eventos de la sección 8). La respuesta `201` no depende de la entrega del aviso: un fallo de comunicación no revierte la transacción ni modifica la respuesta.
 
-**Destino.** `POST {N8N_WEBHOOK_URL}/order-created`. `N8N_WEBHOOK_URL` (variable de entorno existente) es la URL base de los webhooks de n8n. Si no está configurada, no se intenta enviar el aviso y se registra el problema en el log.
+**Destino.** `POST {N8N_WEBHOOK_URL}/order-created`. `N8N_WEBHOOK_URL` (variable de entorno existente) es la URL base de los webhooks de n8n. Si `N8N_WEBHOOK_URL` o `N8N_WEBHOOK_SECRET` (ver «Autenticación») están ausentes, vacías o contienen únicamente espacios en blanco, no se realiza la petición HTTP y se registra un warning que indica la variable faltante, sin revelar el valor del secreto.
 
 **Cuerpo** (JSON, `snake_case`):
 
@@ -494,7 +494,7 @@ La duración de cada sprint depende de las horas por semana disponibles — no h
 
 ## 14. Definition of Done
 - Cada endpoint de la sección 7 tiene al menos un test.
-- El aviso de pedido creado (sección 9) debe tener pruebas de: su payload; la cabecera `X-Webhook-Secret`; que se ejecuta después del commit; la ausencia de `N8N_WEBHOOK_URL` (no se intenta enviar); una respuesta HTTP no 2xx; y un timeout o error de comunicación. En los casos de fallo, el `201` de `POST /api/orders` no se ve afectado.
+- El aviso de pedido creado (sección 9) debe tener pruebas de: su payload; la cabecera `X-Webhook-Secret`; que se ejecuta después del commit; la ausencia de `N8N_WEBHOOK_URL` o de `N8N_WEBHOOK_SECRET` (no se intenta enviar), y que un valor compuesto únicamente por espacios en blanco en cualquiera de las dos tampoco provoca el envío; una respuesta HTTP no 2xx; y un timeout o error de comunicación. En los casos de fallo, el `201` de `POST /api/orders` no se ve afectado.
 - `docker compose up --build` levanta el sistema completo sin pasos manuales.
 - El README explica cómo correrlo y qué decisiones se tomaron, y por qué.
 - Puedes explicar cada decisión de este documento sin tenerlo abierto.
