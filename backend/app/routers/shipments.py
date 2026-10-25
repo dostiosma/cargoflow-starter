@@ -191,6 +191,7 @@ def assign_shipment(
             "driver_id": shipment.driver_id,
             "status": shipment.status,
             "message": "El envio ya estaba asignado",
+            "assignment_created": False,
         }
 
     # 3-4) Seleccion FIFO del vehiculo disponible, protegida contra una
@@ -250,5 +251,6 @@ def assign_shipment(
         "vehicle_id": shipment.vehicle_id,
         "driver_id": shipment.driver_id,
         "status": shipment.status,
-        "message": f"Asignado vehiculo {vehicle.plate} (conductor: {driver.name})"
+        "message": f"Asignado vehiculo {vehicle.plate} (conductor: {driver.name})",
+        "assignment_created": True,
     }

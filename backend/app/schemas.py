@@ -127,6 +127,10 @@ class ShipmentAssignResponse(BaseModel):
     driver_id: uuid.UUID | None = None
     status: ShipmentStatus
     message: str
+    # Seccion 9 del master spec (Notificaciones duplicadas): true solo cuando ESTA
+    # peticion realizo una asignacion nueva; false en el camino idempotente.
+    # Requerido y sin default: cada return de assign_shipment debe fijarlo.
+    assignment_created: bool
 
 
 class DriverRouteOrderOut(BaseModel):
