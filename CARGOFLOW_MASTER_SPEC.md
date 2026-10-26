@@ -227,7 +227,7 @@ Backend, base de datos y el contrato de API JSON: **snake_case**, siempre. El fr
 | PATCH | /api/orders/{id}/status | Cancelación administrativa (ver "Máquina de estados operacional", sección 6) | React, n8n |
 | GET | /api/shipments | Listar envíos (filtro opcional `?status=`) | React, n8n |
 | GET | /api/shipments/{id} | Detalle de envío | React, Flutter |
-| POST | /api/shipments/{id}/assign | Asigna vehículo y conductor disponibles (idempotente; FastAPI decide la selección, n8n no la duplica) | n8n |
+| POST | /api/shipments/{id}/assign | Asigna vehículo y conductor disponibles (idempotente; FastAPI decide la selección, n8n no la duplica); la respuesta incluye `assignment_created` (sección 9) | n8n |
 | PATCH | /api/shipments/{id}/status | Actualizar estado (ej. "entregado") | Flutter |
 | PATCH | /api/shipments/{id}/risk | Persiste `delay_risk_score` calculado por n8n (sección 6 y 9) | n8n |
 | GET | /api/vehicles | Listar vehículos | React, n8n |
@@ -438,7 +438,7 @@ Contiene exclusivamente esos dos campos: no hay campo `event` ni otros. `shipmen
 
 **Recuperación.** Si el aviso no llega, el Shipment permanece en `pending`. WF1 tendrá un Cron que recuperará las asignaciones pendientes; su contrato detallado queda por definir y se documentará en esta sección antes de implementarlo. Recuperar asignaciones no es lo mismo que garantizar notificaciones.
 
-**Notificaciones duplicadas.** La idempotencia de `POST /api/shipments/{id}/assign` impide asignar dos veces el mismo Shipment, pero por sí sola no evita notificaciones duplicadas. Para distinguir una asignación nueva de una repetida, la respuesta de `POST /api/shipments/{id}/assign` incluirá el campo `assignment_created` (contrato aprobado, pendiente de implementación en D9-C1): `true` cuando esa petición realizó una asignación nueva y `false` cuando la asignación ya existía. WF1 notificará únicamente cuando sea `true`.
+**Notificaciones duplicadas.** La idempotencia de `POST /api/shipments/{id}/assign` impide asignar dos veces el mismo Shipment, pero por sí sola no evita notificaciones duplicadas. Para distinguir una asignación nueva de una repetida, la respuesta de `POST /api/shipments/{id}/assign` incluye el campo `assignment_created`: `true` cuando esa petición crea una asignación nueva y `false` cuando esa petición no crea una asignación nueva. WF1 notificará únicamente cuando sea `true`.
 
 ---
 
