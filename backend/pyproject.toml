@@ -1,3 +1,11 @@
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+# Las pruebas de concurrencia PostgreSQL (tests/pg_concurrency) son opt-in: exigen un
+# PostgreSQL desechable y se lanzan con infrastructure/test-db/pg_test_db.py. Un -m en la
+# linea de comandos reemplaza esta seleccion.
+addopts = "-m 'not pg_concurrency and not pg_concurrency_unit'"
+markers = [
+    "pg_concurrency: pruebas de concurrencia contra PostgreSQL real (requieren TEST_DATABASE_URL y --pg-token-file)",
+    "pg_concurrency_unit: pruebas unitarias de las guardas de la infraestructura PostgreSQL (sin base de datos)",
+]
