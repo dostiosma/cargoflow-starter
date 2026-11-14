@@ -443,12 +443,58 @@ Contiene exclusivamente esos dos campos: no hay campo `event` ni otros. `shipmen
 ---
 
 ## 10. Seguridad (nivel MVP, pero real)
-- JWT con expiración corta + refresh token
-- Contraseñas con bcrypt, nunca en texto plano
-- Variables sensibles en `.env`, nunca commiteadas (`.env.example` sí va en el repo)
-- `N8N_WEBHOOK_SECRET` es una variable sensible: se define en `.env` y nunca se escribe su valor en este documento ni en archivos versionados. Protege la recepción del aviso FastAPI → n8n (cabecera `X-Webhook-Secret`, sección 9) y debe coincidir con la credencial Header Auth configurada en n8n. No es la autenticación de n8n hacia FastAPI, que sigue pendiente de una decisión de seguridad separada.
-- CORS configurado explícitamente para los orígenes conocidos (no `*`)
-- Autorización por rol y propiedad: solo está definida para `GET /api/drivers/{id}/shipments` (sección 7). Para el resto de endpoints queda pendiente de una decisión de seguridad separada.
+
+### 10.1 Autenticación
+- Los usuarios humanos se autentican mediante JWT firmado con HS256 y expiración corta.
+- Las contraseñas se almacenan mediante bcrypt, nunca en texto plano.
+- El refresh token queda pendiente de implementación; no se considera una funcionalidad ya disponible.
+- n8n se autentica ante FastAPI mediante una API key independiente, enviada en la cabecera `X-N8N-API-Key`.
+- La API key se configura mediante `N8N_API_KEY` en `.env`. Su valor nunca se escribe en este documento ni en archivos versionados.
+- La identidad de servicio de n8n es independiente de los usuarios humanos. No se utilizará un usuario ficticio ni se aceptará la API key como si fuera un JWT.
+
+### 10.2 Autorización por identidad y operación
+
+**Admin**
+- Puede consultar pedidos, envíos, conductores y vehículos.
+- Puede crear y cancelar pedidos.
+- Puede consultar detalles, asignar envíos y actualizar los estados de los envíos.
+- Puede modificar el estado de los vehículos.
+- No puede actualizar directamente el riesgo de retraso mediante el endpoint reservado a n8n.
+
+**Driver**
+- Solo puede consultar los envíos que le pertenecen.
+- Solo puede consultar el detalle de sus propios envíos.
+- Puede actualizar el estado de sus propios envíos, respetando las transiciones válidas del ciclo de vida.
+- No puede consultar pedidos, consultar envíos globales, asignar envíos, modificar riesgos ni administrar conductores o vehículos.
+
+**n8n (identidad de servicio)**
+- Puede consultar envíos con estado `pending`.
+- Puede ejecutar `POST /api/shipments/{id}/assign`.
+- Puede consultar envíos con estado `in_transit`.
+- Puede ejecutar `PATCH /api/shipments/{id}/risk`.
+- No puede cancelar pedidos, modificar estados de envíos, administrar usuarios, conductores o vehículos ni acceder a otras operaciones.
+
+### 10.3 Protección de credenciales y comunicaciones
+- Las variables sensibles se almacenan en `.env`, nunca se versionan. `.env.example` sí se incluye en el repositorio, sin secretos reales.
+- `N8N_WEBHOOK_SECRET` protege la comunicación FastAPI → n8n mediante `X-Webhook-Secret` (sección 9).
+- `N8N_API_KEY` protege la comunicación n8n → FastAPI mediante `X-N8N-API-Key`.
+- Ambos secretos son independientes y no deben intercambiarse.
+- Las credenciales de n8n se almacenan en su sistema de credenciales, no directamente en el código de los workflows.
+- La API key de servicio debe poder rotarse sin modificar la lógica de negocio.
+- Las comparaciones de secretos deben realizarse de forma segura.
+
+### 10.4 Reglas de autorización
+- Cada endpoint comprueba explícitamente qué identidades pueden utilizarlo.
+- La autenticación y la autorización son responsabilidades separadas.
+- Una credencial ausente o inválida produce HTTP 401.
+- Una identidad válida sin permiso para la operación produce HTTP 403.
+- Las consultas y modificaciones de drivers deben comprobar la propiedad del recurso.
+- Los endpoints de n8n solo aceptan la identidad de servicio en las operaciones expresamente autorizadas.
+- La autenticación humana no debe otorgar automáticamente permisos de servicio, ni viceversa.
+
+### 10.5 CORS y configuración
+- CORS se configura explícitamente para los orígenes conocidos; nunca se utiliza `*` en producción.
+- Los secretos reales no se almacenan en el repositorio, logs ni respuestas HTTP.
 
 ---
 
