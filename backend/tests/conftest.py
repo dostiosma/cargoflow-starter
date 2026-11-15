@@ -31,6 +31,7 @@ def isolate_n8n_settings(monkeypatch):
     """
     monkeypatch.setattr(settings, "n8n_webhook_url", "")
     monkeypatch.setattr(settings, "n8n_webhook_secret", "")
+    monkeypatch.setattr(settings, "n8n_api_key", "")
 
 
 @pytest.fixture()

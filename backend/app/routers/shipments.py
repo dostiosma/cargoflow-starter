@@ -4,7 +4,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.deps import get_current_user
+from app.deps import (
+    N8NServicePrincipal,
+    get_current_user,
+    get_n8n_service,
+)
 from app.events import publish_shipment_risk_alert, publish_shipment_status_changed
 from app.models import Order, OrderStatus, Shipment, User
 from app.schemas import ShipmentOut, ShipmentRiskUpdate, ShipmentStatusUpdate
@@ -109,7 +113,7 @@ def update_shipment_risk(
     shipment_id: uuid.UUID,
     payload: ShipmentRiskUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    n8n_service: N8NServicePrincipal = Depends(get_n8n_service),
 ):
     """Persiste delay_risk_score calculado por n8n (secciones 6, 7 y 9 del master spec).
 
